@@ -293,7 +293,7 @@ fn build_regex(input: &str, span: Span) -> Result<String, ShellError> {
                     let mut lookahead = loop_input.clone();
                     let _ = lookahead.next(); // Skip the second '{'
                     let mut saw_closing = false;
-                    while let Some(next) = lookahead.next() {
+                    for next in lookahead.by_ref() {
                         if next == '}' {
                             saw_closing = true;
                             break;
