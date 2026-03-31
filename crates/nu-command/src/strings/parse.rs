@@ -287,7 +287,25 @@ fn build_regex(input: &str, span: Span) -> Result<String, ShellError> {
             if c == '{' {
                 // If '{{', still creating a plaintext parse command, but just for a single '{' char
                 if loop_input.peek() == Some(&'{') {
-                    let _ = loop_input.next();
+                    // Support patterns like `{{name}` at the end of input. This can be produced by
+                    // interpolation expressions such as `$'{a}(char lbrace){b}'`, where users expect
+                    // a literal `{` followed by a capture.
+                    let mut lookahead = loop_input.clone();
+                    let _ = lookahead.next(); // Skip the second '{'
+                    let mut saw_closing = false;
+                    while let Some(next) = lookahead.next() {
+                        if next == '}' {
+                            saw_closing = true;
+                            break;
+                        }
+                        if next == '{' {
+                            break;
+                        }
+                    }
+
+                    if !(saw_closing && lookahead.peek().is_none()) {
+                        let _ = loop_input.next();
+                    }
                 } else {
                     break;
                 }
