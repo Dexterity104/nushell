@@ -650,6 +650,8 @@ fn path_contains_hidden_folder(path: &Path, folders: &[PathBuf]) -> bool {
 
 #[cfg(unix)]
 use std::os::unix::fs::FileTypeExt;
+#[cfg(all(unix, any(target_os = "linux", target_os = "android")))]
+use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 
 pub fn get_file_type(md: &std::fs::Metadata, display_name: &str, use_mime_type: bool) -> String {
@@ -689,6 +691,52 @@ pub fn get_file_type(md: &std::fs::Metadata, display_name: &str, use_mime_type: 
     } else {
         file_type.to_string()
     }
+}
+
+#[cfg(unix)]
+fn unix_mode_string(md: &std::fs::Metadata, filename: &Path) -> String {
+    let mut mode = umask::Mode::from(md.permissions().mode()).to_string();
+    if has_extended_acl(filename) {
+        mode.push('+');
+    }
+    mode
+}
+
+#[cfg(all(unix, any(target_os = "linux", target_os = "android")))]
+fn has_extended_acl(path: &Path) -> bool {
+    use std::ffi::CString;
+
+    let Ok(c_path) = CString::new(path.as_os_str().as_bytes()) else {
+        return false;
+    };
+
+    // Match GNU ls behavior by checking for POSIX ACL xattrs.
+    unsafe {
+        let xattr_size = nix::libc::llistxattr(c_path.as_ptr(), std::ptr::null_mut(), 0);
+        if xattr_size <= 0 {
+            return false;
+        }
+
+        let mut xattrs = vec![0_u8; xattr_size as usize];
+        let bytes_read = nix::libc::llistxattr(
+            c_path.as_ptr(),
+            xattrs.as_mut_ptr().cast::<std::ffi::c_char>(),
+            xattrs.len(),
+        );
+        if bytes_read <= 0 {
+            return false;
+        }
+
+        xattrs[..bytes_read as usize]
+            .split(|b| *b == 0)
+            .filter(|name| !name.is_empty())
+            .any(|name| name == b"system.posix_acl_access" || name == b"system.posix_acl_default")
+    }
+}
+
+#[cfg(all(unix, not(any(target_os = "linux", target_os = "android"))))]
+fn has_extended_acl(_path: &Path) -> bool {
+    false
 }
 
 /// Escape control characters in filenames so they are displayed visibly
@@ -785,10 +833,9 @@ pub(crate) fn dir_entry_dict(
             use nu_utils::filesystem::users;
             use std::os::unix::fs::MetadataExt;
 
-            let mode = md.permissions().mode();
             record.push(
                 "mode",
-                Value::string(umask::Mode::from(mode).to_string(), span),
+                Value::string(unix_mode_string(md, filename), span),
             );
 
             let nlinks = md.nlink();
